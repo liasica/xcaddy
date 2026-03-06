@@ -2,11 +2,13 @@
 # 从 GitHub Release 下载并安装 Caddy
 # 仓库: https://github.com/liasica/xcaddy
 
-set -e
+set -euo pipefail
 
 REPO="liasica/xcaddy"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/caddy"
+TMP_FILE="/tmp/caddy"
+CHECKSUM_FILE="/tmp/caddy.sha256"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -20,8 +22,10 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
 # 检测系统架构
 detect_arch() {
-    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
-    local arch=$(uname -m)
+    local os
+    local arch
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    arch=$(uname -m)
 
     case $arch in
         x86_64|amd64) arch="amd64" ;;
@@ -38,7 +42,7 @@ get_latest_version() {
     local api_url="https://api.github.com/repos/${REPO}/releases/latest"
     local version
 
-    version=$(curl -s "$api_url" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    version=$(curl -fsSL "$api_url" | sed -nE 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/p' | head -n 1)
 
     if [ -z "$version" ]; then
         log_error "无法获取最新版本"
@@ -61,6 +65,40 @@ download_caddy() {
         log_error "下载失败: $download_url"
         exit 1
     fi
+}
+
+# 校验下载文件
+verify_checksum() {
+    local version="$1"
+    local platform="$2"
+    local tmp_file="$3"
+    local checksum_file="$4"
+    local checksum_url="https://github.com/${REPO}/releases/download/${version}/caddy-${platform}.sha256"
+    local expected_checksum
+    local actual_checksum
+
+    if ! command -v sha256sum &>/dev/null; then
+        log_warn "未找到 sha256sum，跳过校验"
+        return
+    fi
+
+    log_info "下载校验文件..."
+    if ! curl -L -f -o "$checksum_file" "$checksum_url"; then
+        log_error "下载校验文件失败: $checksum_url"
+        exit 1
+    fi
+
+    expected_checksum=$(awk '{print $1}' "$checksum_file")
+    actual_checksum=$(sha256sum "$tmp_file" | awk '{print $1}')
+
+    if [ -z "$expected_checksum" ] || [ "$expected_checksum" != "$actual_checksum" ]; then
+        log_error "校验失败: $tmp_file"
+        log_error "expected: $expected_checksum"
+        log_error "actual  : $actual_checksum"
+        exit 1
+    fi
+
+    log_info "校验通过"
 }
 
 # 安装 Caddy 二进制
@@ -112,37 +150,37 @@ generate_caddyfile() {
     echo ""
 
     # 域名
-    read -p "请输入域名 (如: example.com): " domain
+    read -r -p "请输入域名 (如: example.com): " domain
     while [ -z "$domain" ]; do
         log_error "域名不能为空"
-        read -p "请输入域名 (如: example.com): " domain
+        read -r -p "请输入域名 (如: example.com): " domain
     done
 
     # 邮箱
-    read -p "请输入邮箱 (用于 TLS 证书，如: admin@example.com): " email
+    read -r -p "请输入邮箱 (用于 TLS 证书，如: admin@example.com): " email
     while [ -z "$email" ]; do
         log_error "邮箱不能为空"
-        read -p "请输入邮箱 (用于 TLS 证书，如: admin@example.com): " email
+        read -r -p "请输入邮箱 (用于 TLS 证书，如: admin@example.com): " email
     done
 
     # 用户名
-    read -p "请输入代理认证用户名: " username
+    read -r -p "请输入代理认证用户名: " username
     while [ -z "$username" ]; do
         log_error "用户名不能为空"
-        read -p "请输入代理认证用户名: " username
+        read -r -p "请输入代理认证用户名: " username
     done
 
     # 密码
-    read -s -p "请输入代理认证密码: " password
+    read -r -s -p "请输入代理认证密码: " password
     echo ""
     while [ -z "$password" ]; do
         log_error "密码不能为空"
-        read -s -p "请输入代理认证密码: " password
+        read -r -s -p "请输入代理认证密码: " password
         echo ""
     done
 
     # 伪装网站
-    read -p "请输入伪装网站 URL (默认: https://cdn.jsdelivr.net): " proxy_site
+    read -r -p "请输入伪装网站 URL (默认: https://cdn.jsdelivr.net): " proxy_site
     proxy_site=${proxy_site:-https://cdn.jsdelivr.net}
 
     cat << EOF > "${CONFIG_DIR}/Caddyfile"
@@ -175,9 +213,10 @@ EOF
 
 # 生成 systemd 服务文件
 generate_systemd_service() {
+    local caddy_bin="${INSTALL_DIR}/caddy"
     log_info "生成 systemd 服务文件..."
 
-    cat << 'EOF' > /etc/systemd/system/caddy.service
+    cat << EOF > /etc/systemd/system/caddy.service
 [Unit]
 Description=Caddy
 Documentation=https://caddyserver.com/docs/
@@ -187,8 +226,8 @@ Requires=network-online.target
 [Service]
 User=caddy
 Group=caddy
-ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
-ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile
+ExecStart=${caddy_bin} run --environ --config ${CONFIG_DIR}/Caddyfile
+ExecReload=${caddy_bin} reload --config ${CONFIG_DIR}/Caddyfile
 TimeoutStopSec=5s
 LimitNOFILE=1048576
 LimitNPROC=512
@@ -226,7 +265,8 @@ main() {
     log_info "=========================================="
 
     # 检查操作系统
-    local os=$(uname -s)
+    local os
+    os=$(uname -s)
     if [ "$os" != "Linux" ]; then
         log_error "此脚本仅支持 Linux 系统"
         log_error "当前系统: $os"
@@ -248,11 +288,12 @@ main() {
     log_info "最新版本: $version"
 
     # 下载
-    local tmp_file="/tmp/caddy"
-    download_caddy "$version" "$platform" "$tmp_file"
+    trap 'rm -f "$TMP_FILE" "$CHECKSUM_FILE"' EXIT
+    download_caddy "$version" "$platform" "$TMP_FILE"
+    verify_checksum "$version" "$platform" "$TMP_FILE" "$CHECKSUM_FILE"
 
     # 安装
-    install_binary "$tmp_file"
+    install_binary "$TMP_FILE"
 
     # 创建用户
     create_user
