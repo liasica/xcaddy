@@ -19,8 +19,6 @@ PLATFORMS=(
     "linux/arm"
     "darwin/amd64"
     "darwin/arm64"
-    "windows/amd64"
-    "windows/arm64"
 )
 
 echo "开始编译 Caddy (版本: $VERSION)"
@@ -30,14 +28,7 @@ echo "========================================"
 for PLATFORM in "${PLATFORMS[@]}"; do
     IFS='/' read -r GOOS GOARCH <<< "$PLATFORM"
 
-    OUTPUT_NAME="caddy"
-    if [ "$GOOS" = "windows" ]; then
-        OUTPUT_NAME="caddy.exe"
-    fi
-
-    # 添加平台后缀
     OUTPUT_FILE="${OUTPUT_DIR}/caddy-${GOOS}-${GOARCH}"
-    [ "$GOOS" = "windows" ] && OUTPUT_FILE="${OUTPUT_FILE}.exe"
 
     echo "编译: $GOOS/$GOARCH"
 
