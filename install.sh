@@ -52,8 +52,8 @@ get_latest_version() {
 download_caddy() {
     local version="$1"
     local platform="$2"
+    local tmp_file="$3"
     local download_url="https://github.com/${REPO}/releases/download/${version}/caddy-${platform}"
-    local tmp_file="/tmp/caddy"
 
     log_info "下载 Caddy ${version} (${platform})..."
 
@@ -61,8 +61,6 @@ download_caddy() {
         log_error "下载失败: $download_url"
         exit 1
     fi
-
-    echo "$tmp_file"
 }
 
 # 安装 Caddy 二进制
@@ -250,7 +248,8 @@ main() {
     log_info "最新版本: $version"
 
     # 下载
-    tmp_file=$(download_caddy "$version" "$platform")
+    local tmp_file="/tmp/caddy"
+    download_caddy "$version" "$platform" "$tmp_file"
 
     # 安装
     install_binary "$tmp_file"
