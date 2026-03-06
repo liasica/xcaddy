@@ -15,9 +15,6 @@ jobs:
       matrix:
         goos: [linux, darwin]
         goarch: [amd64, arm64]
-        include:
-          - goos: linux
-            goarch: arm
     steps:
       - uses: actions/checkout@v6
 
